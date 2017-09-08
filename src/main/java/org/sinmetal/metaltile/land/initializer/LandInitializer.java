@@ -9,6 +9,8 @@ import org.apache.beam.sdk.Pipeline;
 import org.apache.beam.sdk.io.gcp.bigquery.BigQueryIO;
 import org.apache.beam.sdk.io.gcp.bigquery.BigQueryOptions;
 import org.apache.beam.sdk.io.gcp.datastore.DatastoreIO;
+import org.apache.beam.sdk.options.Default;
+import org.apache.beam.sdk.options.Description;
 import org.apache.beam.sdk.options.PipelineOptionsFactory;
 import org.apache.beam.sdk.transforms.DoFn;
 import org.apache.beam.sdk.transforms.PTransform;
@@ -25,9 +27,24 @@ public class LandInitializer {
     static Logger logger = Logger.getLogger(LandInitializer.class.getSimpleName());
 
     public interface LandInitializerOptions extends BigQueryOptions {
+
+        @Description("Input BigQuery Table Path. Example projectId:DatasetId.Table")
+        @Default.String("metal-tile-dev1:world_default.land_home")
+        String getBigQueryTable();
+        void setBigQueryTable(String value);
+
+        @Description("Output Datastore Kind. Example hoge")
+        @Default.String("world-default20170908-land-home")
+        String getDatastoreKind();
+        void setDatastoreKind(String value);
     }
 
     static class TableRowToEntityFn extends DoFn<TableRow, Entity> {
+        final String kindName;
+
+        public TableRowToEntityFn(String kindName) {
+            this.kindName = kindName;
+        }
 
         @ProcessElement
         public void processElement(ProcessContext c) {
@@ -38,7 +55,7 @@ public class LandInitializer {
             logger.info("keyName = " + keyName);
 
             Key.Builder keyBuilder = Key.newBuilder();
-            Key.PathElement pathElement = keyBuilder.addPathBuilder().setKind("world-default20170908-land-home").setName(keyName).build();
+            Key.PathElement pathElement = keyBuilder.addPathBuilder().setKind(this.kindName).setName(keyName).build();
             Key key = keyBuilder.setPath(0, pathElement).build();
 
             Entity.Builder entityBuilder = Entity.newBuilder();
@@ -50,9 +67,16 @@ public class LandInitializer {
     }
 
     public static class BigQueryToDatastore extends PTransform<PCollection<TableRow>, PCollection<Entity>> {
+        final String kindName;
+
+        public BigQueryToDatastore(String name, String kindName) {
+            super(name);
+            this.kindName = kindName;
+        }
+
         @Override
         public PCollection<Entity> expand(PCollection<TableRow> rows) {
-            return rows.apply(ParDo.of(new TableRowToEntityFn()));
+            return rows.apply(ParDo.of(new TableRowToEntityFn(this.kindName)));
         }
     }
 
@@ -60,8 +84,8 @@ public class LandInitializer {
         LandInitializerOptions options = PipelineOptionsFactory.fromArgs(args).withValidation().as(LandInitializerOptions.class);
         Pipeline p = Pipeline.create(options);
 
-        p.apply(BigQueryIO.read().from("metal-tile-dev1:world_default.land_home"))
-                .apply(new BigQueryToDatastore())
+        p.apply(BigQueryIO.read().from(options.getBigQueryTable()))
+                .apply(new BigQueryToDatastore("BigQueryToDatastore", options.getDatastoreKind()))
                 .apply(DatastoreIO.v1().write().withProjectId(options.getProject()));
 
         p.run();
